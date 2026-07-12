@@ -76,7 +76,22 @@ export default function EntryModal({
 		resetDeleteConfirm();
 	};
 
-	const getWorkPayload = () => {
+	const getDistributedAmounts = () => {
+		const cleanAmount = String(amount).trim();
+		if (mode !== "multi" || cleanAmount === "") return null;
+
+		const totalCents = Math.round(Number(cleanAmount) * 100);
+		if (!Number.isFinite(totalCents)) return null;
+
+		const baseCents = Math.trunc(totalCents / selectedDates.length);
+		const remainder = totalCents % selectedDates.length;
+
+		return selectedDates.map((_, index) =>
+			((baseCents + (index < remainder ? 1 : 0)) / 100).toFixed(2),
+		);
+	};
+
+	const getWorkPayload = (amountOverride) => {
 		const cleanAmount = String(amount).trim();
 		const cleanHours = String(hours).trim();
 		const cleanRate = String(rate).trim();
@@ -90,7 +105,9 @@ export default function EntryModal({
 			location: location.trim(),
 			description: description.trim(),
 			amount:
-				mode === "amount"
+				amountOverride !== undefined
+					? amountOverride
+					: mode === "amount"
 					? cleanAmount === ""
 						? null
 						: cleanAmount
@@ -100,7 +117,15 @@ export default function EntryModal({
 		};
 	};
 
-	const saveMultiDayEntries = async (payload) => {
+	const saveMultiDayEntries = async () => {
+		const distributedAmounts = getDistributedAmounts();
+		const payloadByDate = new Map(
+			selectedDates.map((selectedDate, index) => [
+				selectedDate,
+				getWorkPayload(distributedAmounts?.[index]),
+			]),
+		);
+
 		const { data: existingRows, error: lookupError } = await supabase
 			.from("entries")
 			.select("id,date")
@@ -115,12 +140,15 @@ export default function EntryModal({
 			.map((selectedDate) => ({
 				user_id: userId,
 				date: selectedDate,
-				...payload,
+				...payloadByDate.get(selectedDate),
 			}));
 
 		const updateResults = await Promise.all(
 			existingRows.map((entry) =>
-				supabase.from("entries").update(payload).eq("id", entry.id),
+				supabase
+					.from("entries")
+					.update(payloadByDate.get(entry.date))
+					.eq("id", entry.id),
 			),
 		);
 		const updateError = updateResults.find((result) => result.error)?.error;
@@ -147,7 +175,7 @@ export default function EntryModal({
 		const payload = getWorkPayload();
 		const saveError =
 			mode === "multi"
-				? await saveMultiDayEntries(payload)
+				? await saveMultiDayEntries()
 				: existingEntry
 					? (
 							await supabase
@@ -365,48 +393,80 @@ export default function EntryModal({
 							</div>
 						</label>
 					) : (
-						<div className="grid grid-cols-2 gap-3">
-							<label className="block">
-								<span className="mb-1.5 block text-xs font-semibold text-gray-400">
-									Кількість годин
-								</span>
-								<input
-									type="number"
-									inputMode="decimal"
-									placeholder="8"
-									value={hours}
-									onChange={(event) => {
-										setHours(event.target.value);
-										resetDeleteConfirm();
-									}}
-									className="h-12 w-full rounded-xl bg-gray-800 px-4 text-sm outline-none ring-blue-500 placeholder:text-gray-500 hover:bg-gray-700/60 focus:ring-2"
-								/>
-							</label>
-
-							<label className="block">
-								<div className="mb-1.5 flex items-center justify-between gap-2">
-									<span className="text-xs font-semibold text-gray-400">
-										Ставка
+						<div className="grid gap-3">
+							<div className="grid grid-cols-2 gap-3">
+								<label className="block">
+									<span className="mb-1.5 block text-xs font-semibold text-gray-400">
+										Кількість годин
 									</span>
-									<span className="text-xs text-gray-500">опц.</span>
-								</div>
-								<div className="flex h-12 items-center rounded-xl bg-gray-800 px-3 ring-blue-500 transition-colors duration-150 hover:bg-gray-700/60 focus-within:ring-2">
 									<input
 										type="number"
 										inputMode="decimal"
-										placeholder="30"
-										value={rate}
+										placeholder="8"
+										value={hours}
 										onChange={(event) => {
-											setRate(event.target.value);
+											setHours(event.target.value);
 											resetDeleteConfirm();
 										}}
-										className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-500"
+										className="h-12 w-full rounded-xl bg-gray-800 px-4 text-sm outline-none ring-blue-500 placeholder:text-gray-500 hover:bg-gray-700/60 focus:ring-2"
 									/>
-									<span className="ml-2 text-sm font-semibold text-gray-500">
-										zł/h
-									</span>
-								</div>
-							</label>
+								</label>
+
+								<label className="block">
+									<div className="mb-1.5 flex items-center justify-between gap-2">
+										<span className="text-xs font-semibold text-gray-400">
+											Ставка
+										</span>
+										<span className="text-xs text-gray-500">опц.</span>
+									</div>
+									<div className="flex h-12 items-center rounded-xl bg-gray-800 px-3 ring-blue-500 transition-colors duration-150 hover:bg-gray-700/60 focus-within:ring-2">
+										<input
+											type="number"
+											inputMode="decimal"
+											placeholder="30"
+											value={rate}
+											onChange={(event) => {
+												setRate(event.target.value);
+												resetDeleteConfirm();
+											}}
+											className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-500"
+										/>
+										<span className="ml-2 text-sm font-semibold text-gray-500">
+											zł/h
+										</span>
+									</div>
+								</label>
+							</div>
+
+							{mode === "multi" && (
+								<label className="block">
+									<div className="mb-1.5 flex items-center justify-between gap-3">
+										<span className="text-xs font-semibold text-gray-400">
+											Загальна сума
+										</span>
+										<span className="text-xs text-gray-500">необов'язково</span>
+									</div>
+									<div className="flex h-12 items-center rounded-xl bg-gray-800 px-4 ring-blue-500 transition-colors duration-150 hover:bg-gray-700/60 focus-within:ring-2">
+										<input
+											type="number"
+											inputMode="decimal"
+											placeholder="0"
+											value={amount}
+											onChange={(event) => {
+												setAmount(event.target.value);
+												resetDeleteConfirm();
+											}}
+											className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-500"
+										/>
+										<span className="ml-3 text-sm font-semibold text-gray-500">
+											zł
+										</span>
+									</div>
+									<p className="mt-1.5 text-xs text-gray-500">
+										Якщо вказати, розкину суму по вибраних днях.
+									</p>
+								</label>
+							)}
 						</div>
 					)}
 				</div>
