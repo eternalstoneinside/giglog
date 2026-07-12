@@ -1,4 +1,4 @@
-const CACHE_NAME = "giglog-v1";
+const CACHE_NAME = "giglog-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/pwa-icon.svg", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
