@@ -1,7 +1,21 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
+const getDateString = (date) => {
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, "0");
+	const day = String(date.getDate()).padStart(2, "0");
+	return `${year}-${month}-${day}`;
+};
+
 const getInitialMode = (entry) => (entry?.hours ? "hours" : "amount");
+
+const formatDateChip = (date) =>
+	new Date(`${date}T12:00:00`).toLocaleDateString("uk-UA", {
+		day: "numeric",
+		month: "short",
+		weekday: "short",
+	});
 
 export default function EntryModal({
 	date,
@@ -11,6 +25,7 @@ export default function EntryModal({
 	onSave,
 }) {
 	const [mode, setMode] = useState(getInitialMode(existingEntry));
+	const [selectedDates, setSelectedDates] = useState([date]);
 	const [location, setLocation] = useState(existingEntry?.location || "");
 	const [description, setDescription] = useState(
 		existingEntry?.description || "",
@@ -31,6 +46,14 @@ export default function EntryModal({
 			weekday: "long",
 		},
 	);
+	const dateOptions = useMemo(() => {
+		const startDate = new Date(`${date}T12:00:00`);
+		return Array.from({ length: 14 }, (_, index) => {
+			const optionDate = new Date(startDate);
+			optionDate.setDate(startDate.getDate() + index);
+			return getDateString(optionDate);
+		});
+	}, [date]);
 
 	const resetDeleteConfirm = () => setConfirmDelete(false);
 	const requestClose = () => {
@@ -40,19 +63,30 @@ export default function EntryModal({
 		window.setTimeout(onClose, 190);
 	};
 
-	const handleSave = async () => {
-		setError("");
-		setLoading(true);
+	const toggleSelectedDate = (selectedDate) => {
+		setSelectedDates((dates) => {
+			if (dates.includes(selectedDate)) {
+				return dates.length === 1
+					? dates
+					: dates.filter((item) => item !== selectedDate);
+			}
 
+			return [...dates, selectedDate].sort();
+		});
+		resetDeleteConfirm();
+	};
+
+	const getWorkPayload = () => {
 		const cleanAmount = String(amount).trim();
 		const cleanHours = String(hours).trim();
 		const cleanRate = String(rate).trim();
+		const isHourlyMode = mode === "hours" || mode === "multi";
 		const calculatedAmount =
-			mode === "hours" && cleanHours !== "" && cleanRate !== ""
+			isHourlyMode && cleanHours !== "" && cleanRate !== ""
 				? (Number(cleanHours) * Number(cleanRate)).toFixed(2)
 				: null;
 
-		const payload = {
+		return {
 			location: location.trim(),
 			description: description.trim(),
 			amount:
@@ -61,20 +95,73 @@ export default function EntryModal({
 						? null
 						: cleanAmount
 					: calculatedAmount,
-			hours: mode === "hours" && cleanHours !== "" ? cleanHours : null,
-			rate: mode === "hours" && cleanRate !== "" ? cleanRate : null,
+			hours: isHourlyMode && cleanHours !== "" ? cleanHours : null,
+			rate: isHourlyMode && cleanRate !== "" ? cleanRate : null,
 		};
+	};
 
-		const { error: saveError } = existingEntry
-			? await supabase
-					.from("entries")
-					.update(payload)
-					.eq("id", existingEntry.id)
-			: await supabase.from("entries").insert({
-					user_id: userId,
-					date,
-					...payload,
-				});
+	const saveMultiDayEntries = async (payload) => {
+		const { data: existingRows, error: lookupError } = await supabase
+			.from("entries")
+			.select("id,date")
+			.eq("user_id", userId)
+			.in("date", selectedDates);
+
+		if (lookupError) return lookupError;
+
+		const existingDates = new Set(existingRows.map((entry) => entry.date));
+		const rowsToInsert = selectedDates
+			.filter((selectedDate) => !existingDates.has(selectedDate))
+			.map((selectedDate) => ({
+				user_id: userId,
+				date: selectedDate,
+				...payload,
+			}));
+
+		const updateResults = await Promise.all(
+			existingRows.map((entry) =>
+				supabase.from("entries").update(payload).eq("id", entry.id),
+			),
+		);
+		const updateError = updateResults.find((result) => result.error)?.error;
+		if (updateError) return updateError;
+
+		if (rowsToInsert.length === 0) return null;
+
+		const { error: insertError } = await supabase
+			.from("entries")
+			.insert(rowsToInsert);
+		return insertError;
+	};
+
+	const handleSave = async () => {
+		setError("");
+		setLoading(true);
+
+		if (mode === "multi" && selectedDates.length === 0) {
+			setLoading(false);
+			setError("Обери хоча б один день.");
+			return;
+		}
+
+		const payload = getWorkPayload();
+		const saveError =
+			mode === "multi"
+				? await saveMultiDayEntries(payload)
+				: existingEntry
+					? (
+							await supabase
+								.from("entries")
+								.update(payload)
+								.eq("id", existingEntry.id)
+						).error
+					: (
+							await supabase.from("entries").insert({
+								user_id: userId,
+								date,
+								...payload,
+							})
+						).error;
 
 		setLoading(false);
 
@@ -134,7 +221,7 @@ export default function EntryModal({
 							{formattedDate}
 						</h2>
 						<p className="mt-1 text-xs text-gray-500">
-							Можна записати готову суму або порахувати по годинах.
+							Можна записати готову суму, години або кілька днів одразу.
 						</p>
 					</div>
 					<button
@@ -150,38 +237,64 @@ export default function EntryModal({
 					</button>
 				</div>
 
-				<div className="mb-4 grid grid-cols-2 rounded-xl bg-gray-800 p-1">
-					<button
-						type="button"
-						onClick={() => {
-							setMode("amount");
-							resetDeleteConfirm();
-						}}
-						className={`h-10 rounded-lg text-sm font-semibold transition ${
-							mode === "amount"
-								? "bg-blue-600 text-white"
-								: "text-gray-400 hover:bg-gray-700 hover:text-gray-200"
-						}`}
-					>
-						Сума
-					</button>
-					<button
-						type="button"
-						onClick={() => {
-							setMode("hours");
-							resetDeleteConfirm();
-						}}
-						className={`h-10 rounded-lg text-sm font-semibold transition ${
-							mode === "hours"
-								? "bg-blue-600 text-white"
-								: "text-gray-400 hover:bg-gray-700 hover:text-gray-200"
-						}`}
-					>
-						Години
-					</button>
+				<div className="mb-4 grid grid-cols-3 rounded-xl bg-gray-800 p-1">
+					{[
+						["amount", "Сума"],
+						["hours", "Години"],
+						["multi", "Кілька днів"],
+					].map(([value, label]) => (
+						<button
+							key={value}
+							type="button"
+							onClick={() => {
+								setMode(value);
+								resetDeleteConfirm();
+							}}
+							className={`h-10 rounded-lg text-sm font-semibold transition ${
+								mode === value
+									? "bg-blue-600 text-white"
+									: "text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+							}`}
+						>
+							{label}
+						</button>
+					))}
 				</div>
 
 				<div className="flex flex-col gap-3">
+					{mode === "multi" && (
+						<div>
+							<div className="mb-1.5 flex items-center justify-between gap-3">
+								<span className="text-xs font-semibold text-gray-400">
+									Обери дні
+								</span>
+								<span className="text-xs text-gray-500">
+									{selectedDates.length} вибрано
+								</span>
+							</div>
+							<div className="grid max-h-32 grid-cols-2 gap-2 overflow-y-auto rounded-xl bg-gray-800 p-2">
+								{dateOptions.map((optionDate) => {
+									const selected = selectedDates.includes(optionDate);
+
+									return (
+										<button
+											key={optionDate}
+											type="button"
+											onClick={() => toggleSelectedDate(optionDate)}
+											className={`rounded-lg px-3 py-2 text-left text-xs font-semibold transition active:scale-95 ${
+												selected
+													? "bg-blue-600 text-white"
+													: "bg-gray-900 text-gray-300 hover:bg-gray-700"
+											}`}
+										>
+											{formatDateChip(optionDate)}
+										</button>
+									);
+								})}
+							</div>
+						</div>
+					)}
+
 					<label className="block">
 						<span className="mb-1.5 block text-xs font-semibold text-gray-400">
 							Де був?
@@ -311,7 +424,13 @@ export default function EntryModal({
 						disabled={loading}
 						className="h-12 rounded-xl bg-blue-600 font-semibold text-white transition-all duration-150 hover:-translate-y-0.5 hover:bg-blue-700 active:translate-y-0 active:scale-[0.99] disabled:opacity-60"
 					>
-						{loading ? "Збереження..." : existingEntry ? "Оновити" : "Зберегти"}
+						{loading
+							? "Збереження..."
+							: mode === "multi"
+								? "Зберегти дні"
+								: existingEntry
+									? "Оновити"
+									: "Зберегти"}
 					</button>
 
 					{existingEntry && (
