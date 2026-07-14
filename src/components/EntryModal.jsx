@@ -33,6 +33,7 @@ export default function EntryModal({
 	const [amount, setAmount] = useState(existingEntry?.amount ?? "");
 	const [hours, setHours] = useState(existingEntry?.hours ?? "");
 	const [rate, setRate] = useState(existingEntry?.rate ?? "");
+	const [paid, setPaid] = useState(existingEntry?.paid === true);
 	const [loading, setLoading] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [closing, setClosing] = useState(false);
@@ -54,6 +55,21 @@ export default function EntryModal({
 			return getDateString(optionDate);
 		});
 	}, [date]);
+	const hasKnownAmount = useMemo(() => {
+		const cleanAmount = String(amount).trim();
+		const cleanHours = String(hours).trim();
+		const cleanRate = String(rate).trim();
+		const hasAmount = cleanAmount !== "" && Number.isFinite(Number(cleanAmount));
+		const hasHourlyAmount =
+			cleanHours !== "" &&
+			cleanRate !== "" &&
+			Number.isFinite(Number(cleanHours)) &&
+			Number.isFinite(Number(cleanRate));
+
+		if (mode === "amount") return hasAmount;
+		if (mode === "multi" && hasAmount) return true;
+		return hasHourlyAmount;
+	}, [amount, hours, mode, rate]);
 
 	const resetDeleteConfirm = () => setConfirmDelete(false);
 	const requestClose = () => {
@@ -101,19 +117,22 @@ export default function EntryModal({
 				? (Number(cleanHours) * Number(cleanRate)).toFixed(2)
 				: null;
 
-		return {
-			location: location.trim(),
-			description: description.trim(),
-			amount:
-				amountOverride !== undefined
-					? amountOverride
-					: mode === "amount"
+		const finalAmount =
+			amountOverride !== undefined
+				? amountOverride
+				: mode === "amount"
 					? cleanAmount === ""
 						? null
 						: cleanAmount
-					: calculatedAmount,
+					: calculatedAmount;
+
+		return {
+			location: location.trim(),
+			description: description.trim(),
+			amount: finalAmount,
 			hours: isHourlyMode && cleanHours !== "" ? cleanHours : null,
 			rate: isHourlyMode && cleanRate !== "" ? cleanRate : null,
+			paid: finalAmount !== null && paid,
 		};
 	};
 
@@ -234,7 +253,7 @@ export default function EntryModal({
 			onClick={requestClose}
 		>
 			<div
-				className="modal-sheet mb-3 w-full max-w-md rounded-3xl bg-gray-900 p-5 shadow-2xl shadow-black/40"
+				className="modal-sheet mb-3 max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl bg-gray-900 p-5 shadow-2xl shadow-black/40"
 				data-closing={closing ? "true" : "false"}
 				onClick={(event) => event.stopPropagation()}
 			>
@@ -469,6 +488,46 @@ export default function EntryModal({
 							)}
 						</div>
 					)}
+
+					<div className="flex items-center justify-between gap-4 rounded-xl bg-gray-800 px-4 py-3">
+						<div className="min-w-0">
+							<p className="text-sm font-semibold text-gray-200">
+								{hasKnownAmount
+									? paid
+										? "Оплачено"
+										: "Чекаю оплату"
+									: "Статус оплати"}
+							</p>
+							<p className="mt-0.5 text-xs text-gray-500">
+								{hasKnownAmount
+									? mode === "multi"
+										? "Статус застосовується до всіх вибраних днів."
+										: "Увімкни, коли гроші вже отримав."
+									: "Спочатку вкажи суму або години зі ставкою."}
+							</p>
+						</div>
+						<button
+							type="button"
+							role="switch"
+							aria-checked={hasKnownAmount && paid}
+							disabled={!hasKnownAmount}
+							onClick={() => {
+								setPaid((value) => !value);
+								resetDeleteConfirm();
+							}}
+							className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-150 disabled:opacity-40 ${
+								hasKnownAmount && paid ? "bg-green-500" : "bg-gray-600"
+							}`}
+						>
+							<span
+								className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-150 ${
+									hasKnownAmount && paid
+										? "translate-x-6"
+										: "translate-x-1"
+								}`}
+							/>
+						</button>
+					</div>
 				</div>
 
 				{error && (

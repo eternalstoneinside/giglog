@@ -41,6 +41,7 @@ export default function Home({ session }) {
 	const [error, setError] = useState("");
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [reportStatus, setReportStatus] = useState("");
+	const [updatingPaidId, setUpdatingPaidId] = useState(null);
 
 	const fetchEntries = useCallback(async () => {
 		const year = currentMonth.getFullYear();
@@ -124,6 +125,13 @@ export default function Home({ session }) {
 		() => sortedEntries.filter((entry) => getEntryAmount(entry) === null),
 		[sortedEntries],
 	);
+	const unpaidEntries = useMemo(
+		() =>
+			sortedEntries.filter(
+				(entry) => getEntryAmount(entry) !== null && entry.paid !== true,
+			),
+		[sortedEntries],
+	);
 	const totalMonth = useMemo(
 		() =>
 			entries.reduce(
@@ -137,16 +145,31 @@ export default function Home({ session }) {
 			entries.reduce((sum, entry) => sum + (parseFloat(entry.hours) || 0), 0),
 		[entries],
 	);
+	const paidTotal = useMemo(
+		() =>
+			entries.reduce(
+				(sum, entry) =>
+					sum + (entry.paid === true ? parseFloat(getEntryAmount(entry)) || 0 : 0),
+				0,
+			),
+		[entries],
+	);
+	const unpaidTotal = totalMonth - paidTotal;
 	const reportText = useMemo(() => {
-		const summary = [
-			`${totalMonth.toFixed(2)} zł`,
+		const details = [
 			totalHours > 0 ? `${totalHours} год` : null,
 			`${entries.length} ${entries.length === 1 ? "день" : "днів"}`,
 		]
 			.filter(Boolean)
 			.join(" · ");
 
-		const lines = [`GigLog — ${monthName}`, summary];
+		const lines = [
+			`GigLog — ${monthName}`,
+			`Зароблено: ${totalMonth.toFixed(2)} zł`,
+			`Оплачено: ${paidTotal.toFixed(2)} zł`,
+			`Чекаю: ${unpaidTotal.toFixed(2)} zł`,
+			details,
+		];
 
 		if (pendingEntries.length > 0) {
 			lines.push(`Треба дописати: ${pendingEntries.length}`);
@@ -165,7 +188,9 @@ export default function Home({ session }) {
 					.join(" — ");
 				lines.push(
 					`${formatEntryDate(entry.date)} — ${workDetails} — ${
-						amount ? `${amount} zł` : "сума пізніше"
+						amount
+							? `${amount} zł · ${entry.paid === true ? "оплачено" : "чекаю оплату"}`
+							: "сума пізніше"
 					}`,
 				);
 			});
@@ -175,10 +200,12 @@ export default function Home({ session }) {
 	}, [
 		entries.length,
 		monthName,
+		paidTotal,
 		pendingEntries.length,
 		sortedEntries,
 		totalHours,
 		totalMonth,
+		unpaidTotal,
 	]);
 	const userName =
 		session.user.user_metadata?.name || session.user.email || "GigLog";
@@ -224,6 +251,35 @@ export default function Home({ session }) {
 		fallbackId = window.setTimeout(() => {
 			window.location.href = telegramWebUrl;
 		}, 900);
+	};
+
+	const handlePaidToggle = async (entry) => {
+		if (updatingPaidId || getEntryAmount(entry) === null) return;
+
+		const nextPaid = entry.paid !== true;
+		setUpdatingPaidId(entry.id);
+		setError("");
+
+		const { data, error: updateError } = await supabase
+			.from("entries")
+			.update({ paid: nextPaid })
+			.eq("id", entry.id)
+			.eq("user_id", session.user.id)
+			.select("id")
+			.maybeSingle();
+
+		if (updateError || !data) {
+			setError("Не вдалося змінити статус оплати. Спробуй ще раз.");
+			setUpdatingPaidId(null);
+			return;
+		}
+
+		setEntries((currentEntries) =>
+			currentEntries.map((item) =>
+				item.id === entry.id ? { ...item, paid: nextPaid } : item,
+			),
+		);
+		setUpdatingPaidId(null);
 	};
 
 	return (
@@ -315,6 +371,26 @@ export default function Home({ session }) {
 					</button>
 				)}
 
+				{unpaidEntries.length > 0 && (
+					<button
+						type="button"
+						onClick={() => handleDayClick(unpaidEntries[0].date)}
+						className="mb-4 flex w-full items-center justify-between gap-3 rounded-2xl border border-amber-500/20 bg-gray-900 p-4 text-left transition-all duration-150 hover:-translate-y-0.5 hover:bg-gray-800 active:translate-y-0 active:scale-[0.99]"
+					>
+						<div>
+							<p className="text-sm font-bold text-gray-100">Чекаю оплату</p>
+							<p className="mt-1 text-xs text-gray-500">
+								{unpaidEntries.length} {unpaidEntries.length === 1 ? "день" : "дні"}
+								{" · "}
+								<span className="font-semibold text-amber-200">
+									{unpaidTotal.toFixed(2)} zł
+								</span>
+							</p>
+						</div>
+						<span className="text-xl text-gray-500">›</span>
+					</button>
+				)}
+
 				<section className="mb-4 rounded-2xl bg-gray-900 p-3">
 					<div className="grid grid-cols-[40px_1fr_40px] items-center gap-3">
 						<button
@@ -340,7 +416,12 @@ export default function Home({ session }) {
 					</div>
 				</section>
 
-				<MonthSummary total={totalMonth} count={entries.length} />
+				<MonthSummary
+					total={totalMonth}
+					paidTotal={paidTotal}
+					unpaidTotal={unpaidTotal}
+					count={entries.length}
+				/>
 
 				{error && (
 					<p className="mb-4 rounded-xl bg-red-950 px-4 py-3 text-sm text-red-200">
@@ -387,32 +468,54 @@ export default function Home({ session }) {
 									.join(" · ");
 
 								return (
-									<button
+									<div
 										key={entry.id}
-										type="button"
-										onClick={() => handleDayClick(entry.date)}
-										className="flex items-center justify-between gap-3 rounded-2xl bg-gray-900 p-3 text-left transition-all duration-150 hover:-translate-y-0.5 hover:bg-gray-800 active:translate-y-0 active:scale-[0.99]"
+										className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-2xl bg-gray-900 transition-all duration-150 hover:-translate-y-0.5 hover:bg-gray-800"
 									>
-										<div className="min-w-0">
+										<button
+											type="button"
+											onClick={() => handleDayClick(entry.date)}
+											className="min-w-0 p-3 pr-1 text-left active:scale-[0.99]"
+										>
 											<p className="truncate text-sm font-semibold">
 												{entry.location || "Без місця"}
 											</p>
 											<p className="truncate text-xs text-gray-500">
 												{entryDetails}
 											</p>
+										</button>
+										<div className="flex flex-col items-end gap-1.5 p-3 pl-1">
+											<span
+												className={`shrink-0 rounded-full px-3 py-1 text-sm font-bold ${
+													entryHasAmount
+														? entry.paid === true
+															? "bg-green-950 text-green-300"
+															: "bg-amber-950 text-amber-200"
+														: "bg-gray-800 text-gray-400"
+												}`}
+											>
+												{entryHasAmount ? `${entryAmount} zł` : "сума пізніше"}
+											</span>
+											{entryHasAmount && (
+												<button
+													type="button"
+													disabled={updatingPaidId === entry.id}
+													onClick={() => handlePaidToggle(entry)}
+													className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition active:scale-95 disabled:opacity-50 ${
+														entry.paid === true
+															? "bg-green-500/15 text-green-300 hover:bg-green-500/25"
+															: "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200"
+													}`}
+												>
+													{updatingPaidId === entry.id
+														? "Зберігаю..."
+														: entry.paid === true
+															? "✓ Оплачено"
+															: "Позначити оплачено"}
+												</button>
+											)}
 										</div>
-										<span
-											className={`shrink-0 rounded-full px-3 py-1 text-sm font-bold ${
-												entryHasAmount
-													? "bg-green-950 text-green-300"
-													: "bg-amber-950 text-amber-200"
-											}`}
-										>
-											{entryHasAmount
-												? `${entryAmount} zł`
-												: "сума пізніше"}
-										</span>
-									</button>
+									</div>
 								);
 							})}
 						</div>

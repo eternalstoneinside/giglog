@@ -59,6 +59,7 @@ export default function Calendar({
 					const entry = getEntryForDay(day);
 					const entryAmount = getEntryAmount(entry);
 					const hasValue = entryAmount !== null;
+					const isPaid = hasValue && entry?.paid === true;
 					const isToday = date === today;
 					const isSelected = date === selectedDate;
 
@@ -69,7 +70,7 @@ export default function Calendar({
 							onClick={() => onDayClick(date)}
 							className={`
 								aspect-square rounded-xl text-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20 active:translate-y-0 active:scale-95
-								${hasValue ? "bg-green-950 text-green-300" : entry ? "bg-amber-950 text-amber-200" : "bg-gray-800 text-gray-300 hover:bg-gray-700"}
+								${isPaid ? "bg-green-950 text-green-300" : hasValue ? "bg-amber-950 text-amber-200" : entry ? "bg-gray-800 text-gray-300" : "bg-gray-800 text-gray-300 hover:bg-gray-700"}
 								${isToday ? "ring-2 ring-blue-500" : ""}
 								${isSelected ? "outline outline-2 outline-white/60" : ""}
 							`}
@@ -77,7 +78,11 @@ export default function Calendar({
 							<span className="flex h-full flex-col items-center justify-center gap-0.5">
 								<span className="font-semibold">{day}</span>
 								{hasValue && (
-									<span className="max-w-full truncate px-1 text-[10px] leading-none text-green-400">
+									<span
+										className={`max-w-full truncate px-1 text-[10px] leading-none ${
+											isPaid ? "text-green-400" : "text-amber-300"
+										}`}
+									>
 										{entryAmount} zł
 									</span>
 								)}
